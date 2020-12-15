@@ -62,7 +62,7 @@ examples:
       {{- include "helm-toolkit.manifests.ingress" ( dict "envAll" . "backendServiceType" "key-manager" "backendPort" "b-api" "endpoint" "public" ) -}}
     return: |
       ---
-      apiVersion: networking.k8s.io/v1beta1
+      apiVersion: networking.k8s.io/v1
       kind: Ingress
       metadata:
         name: barbican
@@ -94,7 +94,7 @@ examples:
                     serviceName: barbican-api
                     servicePort: b-api
       ---
-      apiVersion: networking.k8s.io/v1beta1
+      apiVersion: networking.k8s.io/v1
       kind: Ingress
       metadata:
         name: barbican-namespace-fqdn
@@ -116,7 +116,7 @@ examples:
                     serviceName: barbican-api
                     servicePort: b-api
       ---
-      apiVersion: networking.k8s.io/v1beta1
+      apiVersion: networking.k8s.io/v1
       kind: Ingress
       metadata:
         name: barbican-cluster-fqdn
@@ -182,7 +182,7 @@ examples:
       {{- include "helm-toolkit.manifests.ingress" ( dict "envAll" . "backendServiceType" "key-manager" "backendPort" "b-api" "endpoint" "public" ) -}}
     return: |
       ---
-      apiVersion: networking.k8s.io/v1beta1
+      apiVersion: networking.k8s.io/v1
       kind: Ingress
       metadata:
         name: barbican
@@ -273,7 +273,7 @@ examples:
       {{- include "helm-toolkit.manifests.ingress" ( dict "envAll" . "backendServiceType" "key-manager" "backendPort" "b-api" "endpoint" "public" "certIssuer" "ca-issuer" ) -}}
     return: |
       ---
-      apiVersion: networking.k8s.io/v1beta1
+      apiVersion: networking.k8s.io/v1
       kind: Ingress
       metadata:
         name: barbican
@@ -363,10 +363,10 @@ examples:
                 name: ca-issuer
                 kind: ClusterIssuer
     usage: |
-      {{- include "helm-toolkit.manifests.ingress" ( dict "envAll" . "backendServiceType" "key-manager" "backendPort" "b-api" "endpoint" "public" "certIssuer" "ca-issuer") -}}
+      {{- include "helm-toolkit.manifests.ingress" ( dict "envAll" . "backendServiceType" "key-manager" "backendPort" "b-api" "endpoint" "public" "certIssuer" "ca-issuer" "certIssuerType" "cluster-issuer") -}}
     return: |
       ---
-      apiVersion: networking.k8s.io/v1beta1
+      apiVersion: networking.k8s.io/v1
       kind: Ingress
       metadata:
         name: barbican
@@ -441,7 +441,7 @@ examples:
       {{ $ingressOpts | include "helm-toolkit.manifests.ingress" }}
     return: |
       ---
-      apiVersion: networking.k8s.io/v1beta1
+      apiVersion: networking.k8s.io/v1
       kind: Ingress
       metadata:
         name: grafana
@@ -473,7 +473,7 @@ examples:
                     serviceName: grafana-dashboard
                     servicePort: dashboard
       ---
-      apiVersion: networking.k8s.io/v1beta1
+      apiVersion: networking.k8s.io/v1
       kind: Ingress
       metadata:
         name: grafana-namespace-fqdn
@@ -503,7 +503,7 @@ examples:
                     serviceName: grafana-dashboard
                     servicePort: dashboard
       ---
-      apiVersion: networking.k8s.io/v1beta1
+      apiVersion: networking.k8s.io/v1
       kind: Ingress
       metadata:
         name: grafana-cluster-fqdn
@@ -543,9 +543,12 @@ examples:
   http:
     paths:
       - path: /
+        pathType: ImplementationSpecific
         backend:
-          serviceName: {{ $backendName }}
-          servicePort: {{ $backendPort }}
+          service:
+            name: {{ $backendName }}
+            port:
+              name: {{ $backendPort }}
 {{- end }}
 
 {{- define "helm-toolkit.manifests.ingress" -}}
@@ -555,27 +558,30 @@ examples:
 {{- $backendPort := index . "backendPort" -}}
 {{- $endpoint := index . "endpoint" | default "public" -}}
 {{- $certIssuer := index . "certIssuer" | default "" -}}
+{{- $certIssuerType := index . "certIssuerType" | default "issuer" -}}
+{{- if eq $certIssuerType "ClusterIssuer" }}
+{{- $certIssuerType = "cluster-issuer" -}}
+{{- else }}
+{{- $certIssuerType = "issuer" -}}
+{{- end }}
 {{- $ingressName := tuple $backendServiceType $endpoint $envAll | include "helm-toolkit.endpoints.hostname_short_endpoint_lookup" }}
 {{- $backendName := tuple $backendServiceType "internal" $envAll | include "helm-toolkit.endpoints.hostname_short_endpoint_lookup" }}
 {{- $hostName := tuple $backendServiceType $endpoint $envAll | include "helm-toolkit.endpoints.hostname_short_endpoint_lookup" }}
 {{- $hostNameFull := tuple $backendServiceType $endpoint $envAll | include "helm-toolkit.endpoints.hostname_fqdn_endpoint_lookup" }}
-{{- $certIssuerType := "cluster-issuer" -}}
-{{- if $envAll.Values.cert_issuer_type }}
-{{- $certIssuerType = $envAll.Values.cert_issuer_type }}
-{{- end }}
 ---
-apiVersion: networking.k8s.io/v1beta1
+apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
   name: {{ $ingressName }}
   annotations:
-    kubernetes.io/ingress.class: {{ index $envAll.Values.network $backendService "ingress" "classes" "namespace" | quote }}
+    #kubernetes.io/ingress.class: {{ index $envAll.Values.network $backendService "ingress" "classes" "cluster" | quote }}
 {{- if $certIssuer }}
     cert-manager.io/{{ $certIssuerType }}: {{ $certIssuer }}
     certmanager.k8s.io/{{ $certIssuerType }}: {{ $certIssuer }}
 {{- end }}
 {{ toYaml (index $envAll.Values.network $backendService "ingress" "annotations") | indent 4 }}
 spec:
+  ingressClassName: {{ index $envAll.Values.network $backendService "ingress" "classes" "cluster" | quote }}
 {{- $host := index $envAll.Values.endpoints ( $backendServiceType | replace "-" "_" ) "hosts" }}
 {{- if $certIssuer }}
 {{- $secretName := index $envAll.Values.secrets "tls" ( $backendServiceType | replace "-" "_" ) $backendService $endpoint }}
@@ -614,14 +620,15 @@ spec:
 {{- range $key2, $ingressController := tuple "namespace" "cluster" }}
 {{- $vHosts := list $hostNameFull }}
 ---
-apiVersion: networking.k8s.io/v1beta1
+apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
   name: {{ printf "%s-%s-%s" $ingressName $ingressController "fqdn" }}
   annotations:
-    kubernetes.io/ingress.class: {{ index $envAll.Values.network $backendService "ingress" "classes" $ingressController | quote }}
+    #kubernetes.io/ingress.class: {{ index $envAll.Values.network $backendService "ingress" "classes" $ingressController | quote }}
 {{ toYaml (index $envAll.Values.network $backendService "ingress" "annotations") | indent 4 }}
 spec:
+  ingressClassName: {{ index $envAll.Values.network $backendService "ingress" "classes" $ingressController | quote }}
 {{- $host := index $envAll.Values.endpoints ( $backendServiceType | replace "-" "_" ) "host_fqdn_override" }}
 {{- if hasKey $host $endpoint }}
 {{- $endpointHost := index $host $endpoint }}
