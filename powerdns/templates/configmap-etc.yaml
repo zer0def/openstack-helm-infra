@@ -12,35 +12,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */}}
 
-{{- define "powerdns.configmap.etc" -}}
-{{- range $key, $value :=  . }}
-{{ $key | replace "_" "-" }} = {{ $value }}
-{{- end }}
-{{- end -}}
-
 {{- if .Values.manifests.configmap_etc }}
-{{- $mysql := .Values.conf.mysql.client }}
-
-{{- if empty $mysql.host -}}
-{{- $_ :=  tuple "oslo_db" "internal" . | include "helm-toolkit.endpoints.endpoint_host_lookup" | set $mysql "host" -}}
-{{- $_ :=  $mysql.host | set .Values.conf.powerdns "gmysql_host" -}}
-{{- end -}}
-
-{{- if empty $mysql.port -}}
-{{- $_ :=  tuple "oslo_db" "internal" "mysql" . | include "helm-toolkit.endpoints.endpoint_port_lookup" | set $mysql "port" -}}
-{{- $_ :=  $mysql.port | set .Values.conf.powerdns "gmysql_port" -}}
-{{- end -}}
-
-{{- if empty $mysql.user -}}
-{{- $_ :=  .Values.endpoints.oslo_db.auth.powerdns.username | set $mysql "user" -}}
-{{- $_ :=  $mysql.user | set .Values.conf.powerdns "gmysql_user" -}}
-{{- end -}}
-
-{{- if empty $mysql.password -}}
-{{- $_ :=  .Values.endpoints.oslo_db.auth.powerdns.password | set $mysql "password" -}}
-{{- $_ :=  $mysql.password | set .Values.conf.powerdns "gmysql_password" -}}
-{{- end -}}
-
 {{- if empty .Values.conf.powerdns.api_key -}}
 {{- $_ :=  tuple "powerdns" "service" . | include "helm-toolkit.endpoints.endpoint_token_lookup" | set .Values.conf.powerdns "api_key" -}}
 {{- end -}}
@@ -48,9 +20,28 @@ limitations under the License.
 apiVersion: v1
 kind: Secret
 metadata:
-  name: powerdns-etc
+  name: powerdns-db
 type: Opaque
 data:
-  pdns.conf: {{ include "powerdns.configmap.etc" .Values.conf.powerdns | b64enc }}
-  my.cnf: {{ include "helm-toolkit.utils.to_ini" .Values.conf.mysql | b64enc }}
+  AUTOCONF: {{ .Values.conf.powerdns_db.engine | b64enc }}
+  MYSQL_HOST: {{ .Values.endpoints.oslo_db.hosts.default | b64enc }}
+  MYSQL_PORT: {{ .Values.endpoints.oslo_db.port.mysql.default | toString | b64enc }}
+  MYSQL_USER: {{ .Values.endpoints.oslo_db.auth.powerdns.username | b64enc }}
+  MYSQL_PASS: {{ .Values.endpoints.oslo_db.auth.powerdns.password | b64enc }}
+  MYSQL_DB: {{ splitList "/" .Values.endpoints.oslo_db.path | last | b64enc }}
+  PGSQL_HOST: {{ .Values.endpoints.oslo_db.hosts.default | b64enc }}
+  PGSQL_PORT: {{ .Values.endpoints.oslo_db.port.mysql.default | toString | b64enc }}
+  PGSQL_USER: {{ .Values.endpoints.oslo_db.auth.powerdns.username | b64enc }}
+  PGSQL_PASS: {{ .Values.endpoints.oslo_db.auth.powerdns.password | b64enc }}
+  PGSQL_DB: {{ splitList "/" .Values.endpoints.oslo_db.path | last | b64enc }}
+  DNSSEC: {{ .Values.conf.powerdns_db.dnssec | b64enc }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: powerdns-etc
+data:
+{{- range $key, $value := .Values.conf.powerdns }}
+  {{ printf "PDNS_%s" ($key | upper) }}: {{ $value | quote }}
+{{- end }}
 {{- end }}

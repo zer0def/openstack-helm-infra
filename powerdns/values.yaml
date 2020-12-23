@@ -18,9 +18,8 @@
 ---
 images:
   tags:
-    powerdns: docker.io/psitrax/powerdns:4.1.10
+    powerdns: docker.io/naps/powerdns:4.3.1
     db_init: docker.io/openstackhelm/heat:queens-ubuntu_xenial
-    db_sync: docker.io/psitrax/powerdns:4.1.10
     dep_check: quay.io/airshipit/kubernetes-entrypoint:v1.0.0
     image_repo_sync: docker.io/docker:17.07.0
   pull_policy: IfNotPresent
@@ -102,7 +101,7 @@ dependencies:
     powerdns:
       jobs:
         - powerdns-db-init
-        - powerdns-db-sync
+        #- powerdns-db-sync
       services:
         - endpoint: internal
           service: oslo_db
@@ -182,22 +181,20 @@ conf:
     cache_ttl: 0
     query_cache_ttl: 0
     negquery_cache_ttl: 0
-    out_of_zone_additional_processing: no
+    #out_of_zone_additional_processing: "no"
     webserver: true
     webserver_address: 0.0.0.0
     webserver_allow_from: 0.0.0.0/0
-    gmysql_dbname: powerdns
-    gmysql_dnssec: yes
-  mysql:
-    client:
-      database: powerdns
+  powerdns_db:
+    dnssec: "yes"
+    # one of [mysql, postgres, sqlite, false]
+    engine: mysql
 
 manifests:
   configmap_bin: true
   configmap_etc: true
   deployment: true
   job_db_init: true
-  job_db_sync: true
   secret_db: true
   service_dns: true
   service_api: false

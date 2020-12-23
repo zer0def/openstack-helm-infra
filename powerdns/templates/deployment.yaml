@@ -12,6 +12,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */}}
 
+{{/* Might require reworking to a StatefulSet */}}
 {{- if .Values.manifests.deployment }}
 {{- $envAll := . }}
 
@@ -32,6 +33,11 @@ spec:
     matchLabels:
 {{ tuple $envAll "powerdns" "server" | include "helm-toolkit.snippets.kubernetes_metadata_labels" | indent 6 }}
 {{ tuple $envAll | include "helm-toolkit.snippets.kubernetes_upgrades_deployment" | indent 2 }}
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 0
+      maxUnavailable: 1
   template:
     metadata:
       labels:
@@ -51,8 +57,13 @@ spec:
         - name: powerdns
 {{ tuple $envAll "powerdns" | include "helm-toolkit.snippets.image" | indent 10 }}
 {{ tuple $envAll $envAll.Values.pod.resources.server | include "helm-toolkit.snippets.kubernetes_resources" | indent 10 }}
-          command:
-            - pdns_server
+          envFrom:
+            - secretRef:
+                name: powerdns-db
+                optional: false
+            - configMapRef:
+                name: powerdns-etc
+                optional: false
           ports:
             - containerPort: {{ tuple "powerdns" "internal" "powerdns" . | include "helm-toolkit.endpoints.endpoint_port_lookup" }}
               name: pdns-udp
@@ -64,14 +75,4 @@ spec:
           readinessProbe:
             tcpSocket:
               port: {{ tuple "powerdns" "internal" "powerdns_tcp" . | include "helm-toolkit.endpoints.endpoint_port_lookup" }}
-          volumeMounts:
-            - name: powerdns-etc
-              mountPath: /etc/pdns/conf.d/pdns.conf
-              subPath: pdns.conf
-              readOnly: true
-      volumes:
-        - name: powerdns-etc
-          secret:
-            secretName: powerdns-etc
-            defaultMode: 0444
 {{- end }}
