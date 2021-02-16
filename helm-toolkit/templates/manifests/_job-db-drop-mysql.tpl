@@ -62,6 +62,11 @@ spec:
 {{ toYaml $nodeSelector | indent 8 }}
       initContainers:
 {{ tuple $envAll "db_drop" list | include "helm-toolkit.snippets.kubernetes_entrypoint_init_container" | indent 8 }}
+{{- if and $envAll.Values.manifests.certificates $dbAdminTlsSecret }}
+{{- $destUid := default 0 (index (default (dict) (index (dict "envAll" $envAll "application" $serviceName | include "helm-toolkit.snippets.kubernetes_pod_security_context" | fromYaml) "securityContext")) "runAsUser") -}}
+{{- $destGid := default 0 (index (default (dict) (index (dict "envAll" $envAll "application" $serviceName | include "helm-toolkit.snippets.kubernetes_pod_security_context" | fromYaml) "securityContext")) "runAsGroup") -}}
+{{- dict "uid" $destUid "gid" $destGid "tlsSecret" $dbAdminTlsSecret "targetVolume" "db-tls" | include "helm-toolkit.snippets.tls_owner_fix_init_container" | indent 8 }}
+{{- end }}
       containers:
 {{- range $key1, $dbToDrop := $dbsToDrop }}
 {{ $dbToDropType := default "oslo" $dbToDrop.inputType }}
@@ -84,8 +89,11 @@ spec:
               value: {{ $dbToDrop.configDbKey | quote }}
 {{- end }}
 {{- if $envAll.Values.manifests.certificates }}
+{{- $dbEngine := first (splitList "+" (first (splitList ":" $envAll.Values.endpoints.oslo_db.scheme))) }}
+{{- if eq $dbEngine "mysql" }}
             - name: MARIADB_X509
               value: "REQUIRE X509"
+{{- end }}
 {{- end }}
 {{- if eq $dbToDropType "secret" }}
             - name: DB_CONNECTION
@@ -116,8 +124,10 @@ spec:
               subPath: {{ base $dbToDrop.logConfigFile | quote }}
               readOnly: true
 {{- end }}
-{{- if $envAll.Values.manifests.certificates }}
-{{- dict "enabled" $envAll.Values.manifests.certificates "name" $dbAdminTlsSecret "path" "/etc/mysql/certs" | include "helm-toolkit.snippets.tls_volume_mount" | indent 12 }}
+{{- if and $envAll.Values.manifests.certificates $dbAdminTlsSecret }}
+            - name: db-tls
+              mountPath: /etc/mysql/certs
+              readOnly: true
 {{- end }}
 {{- end }}
       volumes:
@@ -133,7 +143,9 @@ spec:
             name: {{ $configMapBin | quote }}
             defaultMode: 0555
 {{- end }}
-{{- if $envAll.Values.manifests.certificates }}
+{{- if and $envAll.Values.manifests.certificates $dbAdminTlsSecret }}
+        - name: db-tls
+          emptyDir: {}
 {{- dict "enabled" $envAll.Values.manifests.certificates "name" $dbAdminTlsSecret | include "helm-toolkit.snippets.tls_volume" | indent 8 }}
 {{- end }}
 {{- $local := dict "configMapBinFirst" true -}}

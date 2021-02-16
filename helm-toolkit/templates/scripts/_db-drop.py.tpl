@@ -28,11 +28,15 @@ import sys
 try:
     import ConfigParser
     PARSER_OPTS = {}
+    from urllib import urlencode
+    from urlparse import urlunsplit
 except ImportError:
     import configparser as ConfigParser
     PARSER_OPTS = {"strict": False}
+    from urllib.parse import urlencode, urlunsplit
 import logging
 from sqlalchemy import create_engine
+from sqlalchemy.sql import text
 
 # Create logger, console handler and formatter
 logger = logging.getLogger('OpenStack-Helm DB Drop')
@@ -92,6 +96,11 @@ else:
     logger.critical('Could not get db config, either from config file or env var')
     sys.exit(1)
 
+ENGINE_ROOT_DB = {
+  "mysql": "/mysql",
+  "postgresql": "/postgres"
+}
+
 # Root DB engine
 try:
     root_engine_full = create_engine(db_connection)
@@ -100,8 +109,14 @@ try:
     drivername = root_engine_full.url.drivername
     host = root_engine_full.url.host
     port = root_engine_full.url.port
-    root_engine_url = ''.join([drivername, '://', root_user, ':', root_password, '@', host, ':', str (port)])
-    root_engine = create_engine(root_engine_url, connect_args=ssl_args)
+    root_engine_url = urlunsplit([
+        drivername,
+        '{user}:{pwd}@{host}:{port}'.format(user=root_user, pwd=root_password, host=host, port=port),
+        ENGINE_ROOT_DB.get(root_engine_full.engine.name, '/'),
+        urlencode(root_engine_full.url.query),
+        ''
+    ])
+    root_engine = create_engine(root_engine_url, connect_args=ssl_args, isolation_level='AUTOCOMMIT')
     connection = root_engine.connect()
     connection.close()
     logger.info("Tested connection to DB @ {0}:{1} as {2}".format(
@@ -122,21 +137,73 @@ except:
     logger.critical('Could not get user database config')
     raise
 
-# Delete DB
-try:
-    root_engine.execute("DROP DATABASE IF EXISTS {0}".format(database))
-    logger.info("Deleted database {0}".format(database))
-except:
-    logger.critical("Could not drop database {0}".format(database))
-    raise
+if root_engine.engine.name == 'mysql':
+    # Delete DB
+    try:
+        root_engine.execute("DROP DATABASE IF EXISTS {0}".format(database))
+        logger.info("Deleted database {0}".format(database))
+    except:
+        logger.critical("Could not drop database {0}".format(database))
+        raise
 
-# Delete DB User
-try:
-    root_engine.execute("DROP USER IF EXISTS {0}".format(user))
-    logger.info("Deleted user {0}".format(user))
-except:
-    logger.critical("Could not delete user {0}".format(user))
-    raise
+    # Delete DB User
+    try:
+        root_engine.execute("DROP USER IF EXISTS {0}".format(user))
+        logger.info("Deleted user {0}".format(user))
+    except:
+        logger.critical("Could not delete user {0}".format(user))
+        raise
+elif root_engine.engine.name == 'postgresql':
+    if root_engine.engine.driver == 'psycopg2':
+        import psycopg2.sql
+
+    # Delete DB
+    try:
+        if root_engine.execute(
+            text("SELECT 1 FROM pg_catalog.pg_database WHERE datname = :db"),
+            db=database
+        ).fetchall():
+            # Disconnect backends from soon-to-be-dropped database
+            root_engine.execute(text(
+                "SELECT pg_terminate_backend(pid) FROM pg_catalog.pg_stat_activity WHERE datname = :db"
+            ), db=database)
+
+            # Drop database
+            stmt = "DROP DATABASE :db"
+            if root_engine.engine.driver == 'psycopg2':
+                try:
+                    db_conn = root_engine.raw_connection()
+                    stmt = psycopg2.sql.SQL("DROP DATABASE {db}").format(
+                        db=psycopg2.sql.Identifier(database)
+                    ).as_string(db_conn.cursor())
+                finally:
+                    db_conn.close()
+            root_engine.execute(text(stmt), db=database)
+            logger.info("Deleted database {0}".format(database))
+    except:
+        logger.critical("Could not drop database {0}".format(database))
+        raise
+
+    # Delete DB User
+    try:
+        if root_engine.execute(
+            text("SELECT 1 FROM pg_catalog.pg_authid WHERE rolname = :role"),
+            role=user
+        ).fetchall():
+            stmt = "DROP ROLE :role"
+            if root_engine.engine.driver == 'psycopg2':
+                try:
+                    db_conn = root_engine.raw_connection()
+                    stmt = psycopg2.sql.SQL("DROP ROLE {role}").format(
+                        role=psycopg2.sql.Identifier(user)
+                    ).as_string(db_conn.cursor())
+                finally:
+                    db_conn.close()
+            root_engine.execute(text(stmt), role=user)
+            logger.info("Deleted user {0}".format(user))
+    except:
+        logger.critical("Could not delete user {0}".format(user))
+        raise
 
 logger.info('Finished DB Management')
 {{- end }}

@@ -140,6 +140,11 @@ spec:
       terminationGracePeriodSeconds: {{ .Values.pod.lifecycle.termination_grace_period.server.timeout | default "180" }}
       initContainers:
 {{ tuple $envAll "postgresql" list | include "helm-toolkit.snippets.kubernetes_entrypoint_init_container" | indent 8 }}
+{{- if .Values.manifests.certificates }}
+{{- $destUid := default 0 (index (default (dict) (index (dict "envAll" $envAll "application" "server" | include "helm-toolkit.snippets.kubernetes_pod_security_context" | fromYaml) "securityContext")) "runAsUser") -}}
+{{- $destGid := default 0 (index (default (dict) (index (dict "envAll" $envAll "application" "server" | include "helm-toolkit.snippets.kubernetes_pod_security_context" | fromYaml) "securityContext")) "runAsGroup") -}}
+{{- dict "uid" $destUid "gid" $destGid "tlsSecret" $envAll.Values.secrets.postgresql.tls.server.internal "targetVolume" "server-certs" | include "helm-toolkit.snippets.tls_owner_fix_init_container" | indent 8 }}
+{{- end }}
         - name: set-volume-perms
 {{ tuple $envAll "postgresql" | include "helm-toolkit.snippets.image" | indent 10 }}
 {{ tuple $envAll $envAll.Values.pod.resources.server | include "helm-toolkit.snippets.kubernetes_resources" | indent 10 }}
@@ -149,13 +154,6 @@ spec:
               /bin/chown {{ .Values.pod.security_context.server.pod.runAsUser }} {{ .Values.storage.mount.path }};
               /bin/chmod 700 {{ .Values.storage.mount.path }};
               /bin/chmod 700 {{ .Values.storage.mount.path }}/*;
-{{- if .Values.manifests.certificates }}
-              /bin/cp /server_certs_temp/* /server_certs/.;
-              /bin/chown {{ .Values.pod.security_context.server.pod.runAsUser }} /server_certs;
-              /bin/chown {{ .Values.pod.security_context.server.pod.runAsUser }} /server_certs/*;
-              /bin/chmod 700 /server_certs;
-              /bin/chmod 600 /server_certs/*;
-{{- end }}
 {{ dict "envAll" $envAll "application" "server" "container" "set_volume_perms" | include "helm-toolkit.snippets.kubernetes_container_security_context" | indent 10 }}
           volumeMounts:
             - name: pod-tmp
@@ -163,14 +161,6 @@ spec:
             - name: postgresql-data
               mountPath: {{ .Values.storage.mount.path }}
               subPath: {{ .Values.storage.mount.subpath }}
-{{- if .Values.manifests.certificates }}
-            - name: server-certs
-              mountPath: /server_certs
-              # server-cert-temp mountpoint is temp storage for secrets. We copy the
-              # secrets to server-certs folder and set owner and permissions.
-              # This is needed because the secrets are always created readonly.
-{{ dict "enabled" $envAll.Values.manifests.certificates "name" $envAll.Values.secrets.postgresql.tls.server.internal "path" "/server_certs_temp" | include "helm-toolkit.snippets.tls_volume_mount" | indent 12 }}
-{{- end }}
       containers:
         - name: postgresql
 {{ tuple $envAll "postgresql" | include "helm-toolkit.snippets.image" | indent 10 }}
@@ -252,7 +242,8 @@ spec:
 {{- end }}
 {{- if .Values.manifests.certificates }}
             - name: server-certs
-              mountPath: /server_certs
+              mountPath: {{ .Values.tls.mountPath }}
+              readOnly: true
 {{- end }}
       volumes:
         - name: pod-tmp
@@ -289,6 +280,7 @@ spec:
           {{ .Values.storage.pvc.class_path }}: {{ .Values.storage.pvc.class_name }}
       spec:
         accessModes: ["ReadWriteOnce"]
+        storageClassName: {{ .Values.storage.pvc.class_name }}
         resources:
           requests:
             storage: {{ .Values.storage.pvc.size }}
@@ -300,6 +292,7 @@ spec:
           {{ .Values.storage.archive_pvc.class_path }}: {{ .Values.storage.archive_pvc.class_name }}
       spec:
         accessModes: ["ReadWriteOnce"]
+        storageClassName: {{ .Values.storage.archive_pvc.class_name }}
         resources:
           requests:
             storage: {{ .Values.storage.archive_pvc.size }}

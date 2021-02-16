@@ -43,5 +43,6 @@ return: |
   secret:
     secretName: {{ $secretName }}
     defaultMode: 292
+    optional: false
 {{- end }}
 {{- end }}

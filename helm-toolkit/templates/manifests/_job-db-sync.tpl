@@ -58,6 +58,11 @@ spec:
 {{ toYaml $nodeSelector | indent 8 }}
       initContainers:
 {{ tuple $envAll "db_sync" list | include "helm-toolkit.snippets.kubernetes_entrypoint_init_container" | indent 8 }}
+{{- if and $envAll.Values.manifests.certificates $dbAdminTlsSecret }}
+{{- $destUid := default 0 (index (default (dict) (index (dict "envAll" $envAll "application" $serviceName | include "helm-toolkit.snippets.kubernetes_pod_security_context" | fromYaml) "securityContext")) "runAsUser") -}}
+{{- $destGid := default 0 (index (default (dict) (index (dict "envAll" $envAll "application" $serviceName | include "helm-toolkit.snippets.kubernetes_pod_security_context" | fromYaml) "securityContext")) "runAsGroup") -}}
+{{- dict "uid" $destUid "gid" $destGid "tlsSecret" $dbAdminTlsSecret "targetVolume" "db-tls" | include "helm-toolkit.snippets.tls_owner_fix_init_container" | indent 8 }}
+{{- end }}
       containers:
         - name: {{ printf "%s-%s" $serviceNamePretty "db-sync" | quote }}
           image: {{ $dbToSync.image | quote }}
@@ -88,7 +93,11 @@ spec:
               mountPath: {{ $dbToSync.logConfigFile | quote }}
               subPath: {{ base $dbToSync.logConfigFile | quote }}
               readOnly: true
-{{- dict "enabled" $envAll.Values.manifests.certificates "name" $dbAdminTlsSecret "path" "/etc/mysql/certs" | include "helm-toolkit.snippets.tls_volume_mount" | indent 12 }}
+{{- if and $envAll.Values.manifests.certificates $dbAdminTlsSecret }}
+            - name: db-tls
+              mountPath: /etc/mysql/certs
+              readOnly: true
+{{- end }}
 {{- if $podVolMounts }}
 {{ $podVolMounts | toYaml | indent 12 }}
 {{- end }}
@@ -111,7 +120,11 @@ spec:
           secret:
             secretName: {{ $configMapEtc | quote }}
             defaultMode: 0444
+{{- if and $envAll.Values.manifests.certificates $dbAdminTlsSecret }}
+        - name: db-tls
+          emptyDir: {}
 {{- dict "enabled" $envAll.Values.manifests.certificates "name" $dbAdminTlsSecret | include "helm-toolkit.snippets.tls_volume" | indent 8 }}
+{{- end }}
 {{- if $podVols }}
 {{ $podVols | toYaml | indent 8 }}
 {{- end }}

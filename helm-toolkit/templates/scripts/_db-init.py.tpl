@@ -28,11 +28,15 @@ import sys
 try:
     import ConfigParser
     PARSER_OPTS = {}
+    from urllib import urlencode
+    from urlparse import urlunsplit
 except ImportError:
     import configparser as ConfigParser
     PARSER_OPTS = {"strict": False}
+    from urllib.parse import urlencode, urlunsplit
 import logging
 from sqlalchemy import create_engine
+from sqlalchemy.sql import text
 
 # Create logger, console handler and formatter
 logger = logging.getLogger('OpenStack-Helm DB Init')
@@ -92,6 +96,11 @@ else:
     logger.critical('Could not get db config, either from config file or env var')
     sys.exit(1)
 
+ENGINE_ROOT_DB = {
+  "mysql": "/mysql",
+  "postgresql": "/postgres"
+}
+
 # Root DB engine
 try:
     root_engine_full = create_engine(db_connection)
@@ -100,8 +109,14 @@ try:
     drivername = root_engine_full.url.drivername
     host = root_engine_full.url.host
     port = root_engine_full.url.port
-    root_engine_url = ''.join([drivername, '://', root_user, ':', root_password, '@', host, ':', str (port)])
-    root_engine = create_engine(root_engine_url, connect_args=ssl_args)
+    root_engine_url = urlunsplit([
+        drivername,
+        '{user}:{pwd}@{host}:{port}'.format(user=root_user, pwd=root_password, host=host, port=port),
+        ENGINE_ROOT_DB.get(root_engine_full.engine.name, '/'),
+        urlencode(root_engine_full.url.query),
+        ''
+    ])
+    root_engine = create_engine(root_engine_url, connect_args=ssl_args, isolation_level='AUTOCOMMIT')
     connection = root_engine.connect()
     connection.close()
     logger.info("Tested connection to DB @ {0}:{1} as {2}".format(
@@ -112,7 +127,7 @@ except:
 
 # User DB engine
 try:
-    user_engine = create_engine(user_db_conn, connect_args=ssl_args)
+    user_engine = create_engine(user_db_conn, connect_args=ssl_args, isolation_level='AUTOCOMMIT')
     # Get our user data out of the user_engine
     database = user_engine.url.database
     user = user_engine.url.username
@@ -122,23 +137,73 @@ except:
     logger.critical('Could not get user database config')
     raise
 
-# Create DB
-try:
-    root_engine.execute("CREATE DATABASE IF NOT EXISTS {0}".format(database))
-    logger.info("Created database {0}".format(database))
-except:
-    logger.critical("Could not create database {0}".format(database))
-    raise
+if root_engine.engine.name == 'mysql':
+    # Create DB
+    try:
+        root_engine.execute("CREATE DATABASE IF NOT EXISTS {0}".format(database))
+        logger.info("Created database {0}".format(database))
+    except:
+        logger.critical("Could not create database {0}".format(database))
+        raise
 
-# Create DB User
-try:
-    root_engine.execute(
-        "GRANT ALL ON `{0}`.* TO \'{1}\'@\'%%\' IDENTIFIED BY \'{2}\' {3}".format(
-            database, user, password, mysql_x509))
-    logger.info("Created user {0} for {1}".format(user, database))
-except:
-    logger.critical("Could not create user {0} for {1}".format(user, database))
-    raise
+    # Create DB User
+    try:
+        root_engine.execute(
+            "CREATE USER IF NOT EXISTS \'{user}\'@\'%%\' IDENTIFIED BY \'{pwd}\'".format(
+                user=user, pwd=password))
+        root_engine.execute(
+            "GRANT ALL ON `{db}`.* TO \'{user}\'@\'%%\'".format(
+                db=database, user=user))
+        logger.info("Created user {0} for {1}".format(user, database))
+    except:
+        logger.critical("Could not create user {0} for {1}".format(user, database))
+        raise
+elif root_engine.engine.name == 'postgresql':
+    if root_engine.engine.driver == 'psycopg2':
+        import psycopg2.sql
+
+    # Create DB User
+    try:
+        if not root_engine.execute(
+            text("SELECT 1 FROM pg_catalog.pg_authid WHERE rolname = :role"),
+            role=user
+        ).fetchall():
+            stmt = "CREATE ROLE :role INHERIT LOGIN ENCRYPTED PASSWORD :pwd"
+            if root_engine.engine.driver == 'psycopg2':
+                try:
+                    db_conn = root_engine.raw_connection()
+                    stmt = psycopg2.sql.SQL("CREATE ROLE {role} INHERIT LOGIN ENCRYPTED PASSWORD :pwd").format(
+                        role=psycopg2.sql.Identifier(user)
+                    ).as_string(db_conn.cursor())
+                finally:
+                    db_conn.close()
+            root_engine.execute(text(stmt), role=user, pwd=password)
+            logger.info("Created user {0}".format(user))
+    except:
+        logger.critical("Could not create user {0}".format(user))
+        raise
+
+    # Create DB
+    try:
+        if not root_engine.execute(
+            text("SELECT 1 FROM pg_catalog.pg_database WHERE datname = :db"),
+            db=database
+        ).fetchall():
+            stmt = "CREATE DATABASE :db OWNER :owner ENCODING 'UTF8' LC_COLLATE 'en_US.UTF-8' LC_CTYPE 'en_US.UTF-8'"
+            if root_engine.engine.driver == 'psycopg2':
+                try:
+                    db_conn = root_engine.raw_connection()
+                    stmt = psycopg2.sql.SQL("CREATE DATABASE {db} OWNER {owner} ENCODING 'UTF8' LC_COLLATE 'en_US.UTF-8' LC_CTYPE 'en_US.UTF-8'").format(
+                        db=psycopg2.sql.Identifier(database),
+                        owner=psycopg2.sql.Identifier(user)
+                    ).as_string(db_conn.cursor())
+                finally:
+                    db_conn.close()
+            root_engine.execute(text(stmt), db=database, owner=user)
+            logger.info("Created database {0} with owner {1}".format(database, user))
+    except:
+        logger.critical("Could not create database {0} with owner {1}".format(database, user))
+        raise
 
 # Test connection
 try:

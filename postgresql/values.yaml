@@ -303,10 +303,6 @@ conf:
     max_worker_processes: '10'
     port: '5432'
     shared_buffers: '2GB'
-    ssl: 'off'
-    ssl_cert_file: '/server_certs/tls.crt'
-    ssl_ca_file: '/server_certs/ca.crt'
-    ssl_key_file: '/server_certs/tls.key'
     ssl_ciphers: 'TLSv1.2:!aNULL'
     tcp_keepalives_idle: '900'
     tcp_keepalives_interval: '100'
@@ -351,6 +347,9 @@ secrets:
   identity:
     admin: keystone-admin-user
     postgresql: postgresql-backup-user
+
+tls:
+  mountPath: /etc/pg-tls
 
 endpoints:
   cluster_domain_suffix: cluster.local

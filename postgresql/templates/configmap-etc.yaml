@@ -14,6 +14,10 @@ limitations under the License.
 
 {{- if .Values.manifests.configmap_etc }}
 {{- $envAll := . }}
+{{- $postgresqlConf := default dict .Values.conf.postgresql }}
+{{- if .Values.manifests.certificates }}
+{{- $postgresqlConf = merge $postgresqlConf (dict "ssl" "on" "ssl_ca_file" (printf "%s/ca.crt" (trimSuffix "/" .Values.tls.mountPath)) "ssl_cert_file" (printf "%s/tls.crt" (trimSuffix "/" .Values.tls.mountPath)) "ssl_key_file" (printf "%s/tls.key" (trimSuffix "/" .Values.tls.mountPath))) }}
+{{- end }}
 
 ---
 apiVersion: v1
@@ -22,7 +26,7 @@ metadata:
   name: postgresql-etc
 data:
   postgresql.conf: |
-{{- range $key, $value := default dict .Values.conf.postgresql }}
+{{- range $key, $value := $postgresqlConf }}
     {{ $key | snakecase }} = '{{ $value }}'
 {{- end }}
   pg_hba.conf: |
